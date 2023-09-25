@@ -1,0 +1,220 @@
+#
+##
+###
+####
+##### 16S analysis (DADA2)	
+####
+###
+##
+#
+# path for reading sequence data: /home/noyes046/data_delivery/umgc/2022-q1/220221_M00784_0576_000000000-K7PHN/Noyes_Project_048_OREI_25
+#
+# Due to RAM constraints in my computer, I will need to use the server to run my 100 samples of rumen fluid amplified by 16S-V4 region.
+# This tutorial is based on the following tutorials:
+# - https://astrobiomike.github.io/amplicon/dada2_workflow_ex (A full workflow for using cutadapt & dada2 on RStudio or Terminal)
+# - https://benjjneb.github.io/dada2/ITS_workflow.html (A full workflow that includes cutadapt for primer removal)
+# - https://benjjneb.github.io/dada2/tutorial_1_8.html (A workflow that does not include cutadapt but is very well detailed)
+# - https://benjjneb.github.io/dada2/bigdata_paired.html (A workflow to work on Terminal with bigger RAM capacity when you have a big dataset)
+
+# 1. Install dada2 package (Source: https://www.metagenomics.wiki/tools/16s/dada2/conda)
+## 1.1. create conda environment 
+## Since I have conda I do not need to install it, but if you have problems installing conda, just check the source of step 1 (up) 
+	module load python3
+	conda create -n dada2 -c conda-forge -c bioconda -c defaults --override-channels bioconductor-dada2
+	# proceed? y
+	# make sure you have the dada2: conda info --envs
+## 1.2. Installing the package in R 
+	source activate dada2
+	# Start R within the conda environment
+	R
+	# PLEASE NOTE THAT TO CLOSE R you need to type:
+	q()
+	# Install the dada2 package within R
+	if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+	BiocManager::install("dada2", version = "3.11")
+	# Call your package as you do in RStudio and check if the installation was done correctly
+	library(dada2); packageVersion("dada2")
+	# You may have the latest dada2 version: For 05/28/2022 the latest version is '1.22.0'
+
+####### REMOVE PRIMERS #########
+#
+# 2. Install cutadapt
+# I did my primer removal with cutadapt on RStudio, you can check this tutorial for that: https://benjjneb.github.io/dada2/ITS_workflow.html
+## 2.1. For RStudio
+	# Please note that you can download cutadapt executable file from: https://cutadapt.readthedocs.io/en/stable/installation.html
+	cutadapt <- "C:/Users/gedio/OneDrive/Documents/UMN/MS/Thesis/Results/16S/cutadapt.exe" # CHANGE ME to the cutadapt path on your machine
+	system2(cutadapt, args = "--version") # Run shell commands from R
+## 2.2. For Terminal 
+	# I did my primer removal on RStudio but you can...
+	# check this out: https://astrobiomike.github.io/amplicon/dada2_workflow_ex
+# 3. Input files path: THIS IS THE MOST IMPORTANT STEP because you will asign your very first object whit the location of your Working directory (where all your files are)
+	# In terminal
+	module load python3
+	module load R
+	source activate dada2
+	# Start R 
+	R
+	# Once you are inside R 
+	library(dada2); packageVersion("dada2")
+	# create your RData file (to save all your objects from your workspace and will not need to run code again)
+	save.image(file = "Rumen_16S.RData")
+	# YOU CAN START NOW!
+	path <- "~/Rumen_16S"  ## CHANGE ME to the directory containing the fastq files.
+	list.files(path)
+	fnFs <- sort(list.files(path, pattern = "_R1_001.fastq.gz", full.names = TRUE))
+	fnRs <- sort(list.files(path, pattern = "_R2_001.fastq.gz", full.names = TRUE))
+# 4. Remove ambiguous bases (N)
+	fnFs.filtN <- file.path(path, "filtN", basename(fnFs)) # Put N-filterd files in filtN/ subdirectory
+	fnRs.filtN <- file.path(path, "filtN", basename(fnRs))
+	filterAndTrim(fnFs, fnFs.filtN, fnRs, fnRs.filtN, maxN = 0, multithread = TRUE)
+# 5. Remove primers WITH CUTADAPT ON RSTUDIO (I did not remove my primers on the Terminal but you can check: https://astrobiomike.github.io/amplicon/dada2_workflow_ex)
+	## 5.1. Identify your primers (asign your primers to an object) 
+	FWD <- "GTGCCAGCMGCCGCGGTAA"  ## CHANGE ME to your forward primer sequence
+	REV <- "GGACTACHVGGGTWTCTAAT"  ## CHANGE ME to your reverse primer sequence
+	## 5.2. Remove them 
+	path.cut <- file.path(path, "cutadapt")
+	if(!dir.exists(path.cut)) dir.create(path.cut)
+	fnFs.cut <- file.path(path.cut, basename(fnFs))
+	fnRs.cut <- file.path(path.cut, basename(fnRs))
+	FWD.RC <- dada2:::rc(FWD)
+	REV.RC <- dada2:::rc(REV)
+	# Trim FWD and the reverse-complement of REV off of R1 (forward reads)
+	R1.flags <- paste("-g", FWD, "-a", REV.RC) 
+	# Trim REV and the reverse-complement of FWD off of R2 (reverse reads)
+	R2.flags <- paste("-G", REV, "-A", FWD.RC) 
+	# Run Cutadapt
+		for(i in seq_along(fnFs)) {
+		system2(cutadapt, args = c(R1.flags, R2.flags, "-n", 2, # -n 2 required to remove FWD and REV from reads
+                             "-o", fnFs.cut[i], "-p", fnRs.cut[i], # output files
+                             fnFs.filtN[i], fnRs.filtN[i])) # input files
+		}
+
+####### TRIMMING TO A GIVEN SEQUENCE LENGHT #######
+#
+# 6. Input cutadapt-ed files
+	# Forward and reverse fastq filenames have the format:
+	cutFs <- sort(list.files(path.cut, pattern = "_R1_001.fastq.gz", full.names = TRUE))
+	cutRs <- sort(list.files(path.cut, pattern = "_R2_001.fastq.gz", full.names = TRUE))
+	# Extract sample names, assuming filenames have format:
+	get.sample.name <- function(fname) strsplit(basename(fname), "_")[[1]][1]
+	sample.names <- unname(sapply(cutFs, get.sample.name))
+	head(sample.names)
+# 7. Inspect read quality 
+	# Please note that I obtained my plots for quality inspection on RSTUDIO with the following command:
+	# STEP 1: First the forward reads
+	plotQualityProfile(cutFs[1:10])
+	# STEP 2: Then Reverse reads
+	plotQualityProfile(cutRs[1:10])
+	# I am not sure how to export figures from R in Terminal but you can check it out here (spanish): https://r-coder.com/exportar-graficos-r/
+# 8. Filter and trim
+# Advised by Tara, we will use the following parameters: *truncLen=c(240,160) and maxEE=c(4,4)*
+	# STEP 1: Create directory for new files
+	# Place filtered files in filtered/ subdirectory
+	filtFs <- file.path(path.cut, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+	filtRs <- file.path(path.cut, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+	# STEP 2: Filter and trim Fw to 240 bp and Rv to 160 bp (enough to overlap the 252 bp size of V4 gene), with an increased error rate = 4,4
+	out <- filterAndTrim(cutFs, filtFs, cutRs, filtRs, truncLen=c(240,160),
+                              maxN=0, maxEE=c(4,4), truncQ=2, rm.phix=TRUE,
+                              compress=TRUE, multithread=TRUE)
+	head(out)
+	# STEP 3: PLooting to see how nice are your trimms 
+	plotQualityProfile(filtFs[1:4])
+	plotQualityProfile(filtRs[1:4])
+
+###### DENOISING #######
+#
+# 9. Learn error rates
+# Advised by Tara, I changed the randomize parameter to "randomize = TRUE"
+	# STEP 1: Forward first
+	errF <- learnErrors(filtFs, multithread=TRUE, randomize = TRUE)
+	# STEP 2: Reverse then
+	errR <- learnErrors(filtRs, multithread=TRUE, randomize = TRUE)
+	# STEP 3: PLot your errors
+	plotErrors(errF, nominalQ=TRUE)
+	plotErrors(errR, nominalQ=TRUE)
+# 10. Dereplication
+	# FORWARD
+	derepFs <- derepFastq(filtFs, verbose=TRUE)
+	# REVERSE
+	derepRs <- derepFastq(filtRs, verbose=TRUE)
+	# Name the derep-class objects by the sample names
+	names(derepFs) <- sample.names
+	names(derepRs) <- sample.names
+# 11. Sample inference: DADA IT!
+	# FORWARD
+	dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+	# REVERSE
+	dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+	# Then, INSPECT!
+	dadaFs[[1]]
+# 12. Merge pair reads 
+	mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+	# Inspect the merger data.frame from the first sample
+	head(mergers[[1]])
+# 13. Construct sequence table
+	# STEP 1
+	seqtab <- makeSequenceTable(mergers)
+	# STEP 2
+	dim(seqtab)
+	# STEP 3: Inspect distribution of sequence lengths
+	table(nchar(getSequences(seqtab)))
+## 13.1. Shorting sequence table to 252-255 bp size
+	# Getting sequences only 252 to 255 bp size
+	seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% seq(251,255)]
+	# Double-cheking
+	dim(seqtab2)
+	# I missed (8706-7977 = 729) sequences that were out of size range allowed for V4 gene =252bp
+	table(nchar(getSequences(seqtab2)))
+# 14. Remove chimera sequences
+# I am not completely sure what they are but we need to remove them
+# We are starting with 4259 sequences as inputs, lets see how many of them are quimeras
+	seqtab.nochim2 <- removeBimeraDenovo(seqtab2, method="consensus", multithread=TRUE, verbose=TRUE)
+	# This will tell us how many non-chimera sequences remain
+	dim(seqtab.nochim2)
+	# this formula will tell us what is the percentage of non-chimera sequences that remain,
+	# So we can not the percentage of chimera sequences we removed
+	sum(seqtab.nochim2)/sum(seqtab2)
+	# Our Chimeras were 0.43%
+# 15. Finally check how many reads have you lost in the whole process, starting with the without-primers input reads (STEP 6) to the final chimera removal (STEP 14)
+	getN <- function(x) sum(getUniques(x))
+	track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim2))
+	# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+	colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+	rownames(track) <- sample.names
+	head(track) 
+# 16. Save in your working directory your "track" table as a summary table in a "tsv format" that Excel can read
+	write.table(track, "read-count-tracking.tsv", quote=FALSE, sep="\t", col.names=NA)
+	
+####### ASSING TAXONOMY #######
+# 
+# 17. ASSIGN TAXONOMY: Now you will give a name to your ASVs
+# For this step you will need to have 2 databases: SILVA genus (~/Rumen_16S/16S_database/silva_nr99_v138.1_train_set.fa.gz) and SILVA species (~/Rumen_16S/16S_database/silva_species_assignment_v138.1.fa.gz)
+# You can download both databases in the most updated version from: https://zenodo.org/record/4587955#.YpZOOGiZPIU
+	# STEP 1: Assign until genus level
+	taxa <- assignTaxonomy(seqtab.nochim2, "~/Rumen_16S/16S_database/silva_nr99_v138.1_train_set.fa.gz", multithread=TRUE)
+	# STEP 2: Assgn until species level
+	taxa <- addSpecies(taxa, "~/Rumen_16S/16S_database/silva_species_assignment_v138.1.fa.gz")
+
+####### EXPORT OUTPUT #######
+#
+# 18. Extracting data from dada2 analysis. You may have: FASTA FILE (with the 16S sequences of each ASV), a count table (ASV table) and a taxonomy table (Tax Table)
+	# giving our seq headers more manageable names (ASV_1, ASV_2...)
+	asv_seqs <- colnames(seqtab.nochim2)
+	asv_headers <- vector(dim(seqtab.nochim2)[2], mode="character")
+	for (i in 1:dim(seqtab.nochim)[2]) {
+	asv_headers[i] <- paste(">ASV", i, sep="_")
+	}
+	# making and writing out a fasta of our final ASV seqs:
+	asv_fasta <- c(rbind(asv_headers, asv_seqs))
+	write(asv_fasta, "ASVs.fa")
+	# count table (ASV table):
+	asv_tab <- t(seqtab.nochim2)
+	row.names(asv_tab) <- sub(">", "", asv_headers)
+	write.table(asv_tab, "ASVs_counts.tsv", sep="\t", quote=F, col.names=NA)
+	# tax table:
+	write.table(taxa, "taxa.tsv", sep = "\t", quote=F, col.names=NA)
+	#SAVING RDS OBJECTS (RDS) AND WORKSPACE (RData)
+	saveRDS(seqtab.nochim2, file = "otu_table.rds")
+	saveRDS(taxa, file = "taxa_table.rds")
+	save.image(file = "Rumen_16S.RData")
